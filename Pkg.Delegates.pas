@@ -7,12 +7,12 @@ type
   IPkgDelegate<T> = interface;
 
 
-  //  IPkgSafeDelegate<T> is passed for external access
-  //  External users can only add/remove delegates, but cannot execute it
+  //  IPkgSafeDelegate<T> is used for external access
+  //  External users can only add/remove delegates, but cannot execute them
   IPkgSafeDelegate<T> = interface ['{6233C0FE-175E-4EC0-91DC-17C4460219B3}']
-    //  Adds a method to execution queue
+    //  Adds a method to the execution queue
     procedure Add(AMethod: T);
-    //  Removes a method from execution queue
+    //  Removes a method from the execution queue
     procedure Remove(AMethod: T);
   end;
 
@@ -21,10 +21,12 @@ type
   //  It is like a container for methods
   IPkgDelegate<T> = interface(IPkgSafeDelegate<T>) ['{18EB7EC7-5843-459D-B147-2A2C1CA96539}']
     //  Invokes methods in the execution queue using Invoker Anonymous method
+    //  It's thread-safe!
     procedure Invoke(AInvokerMethod: TProc<T>);
     //  Easy casting to IPkgSafeDelegate<T>
     function  ToSafeDelegate: IPkgSafeDelegate<T>;
     //  Used to invoke each method from execution queue using for-in construct
+    //  It's thread-safe!
     function  GetEnumerator: TEnumerator<T>;
   end;
 
