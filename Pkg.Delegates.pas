@@ -1,7 +1,7 @@
 unit Pkg.Delegates;
 
 interface
-uses sysUtils, generics.collections, RTTI, windows;
+uses sysUtils, generics.collections, windows;
 
 type
   IPkgDelegate<T> = interface;
