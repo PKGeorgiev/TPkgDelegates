@@ -35,7 +35,7 @@ type
   TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>)
     private
     protected
-      FPadlock: TObject;
+      //FPadlock: TObject;
       FDelegates: TList<T>;
     public type
       TDelegateEnumerator = class(TList<T>.TEnumerator)
@@ -43,11 +43,12 @@ type
         //  Keeps the instance of IPkgDelegate<T> alive
         //  for the period of for-in loop
         FDelegate: IPkgDelegate<T>;
-        //  The PadLock object of the container instance
-        FEnumeratorPadLock: TObject;
+        //  List of methods i.e. execution queue
+        //  It's used for locking
+        FContainerDelegates: TList<T>;
       public
         //  We lock parent container in the Constructor
-        constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<T>; APadlock: TObject);
+        constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<T>);
         //  We Unlock parent container in the Destructor
         destructor Destroy; override;
       end;
@@ -69,31 +70,29 @@ implementation
 
 procedure TPkgDelegate<T>.Add(AMethod: T);
 begin
-  TMonitor.Enter(FPadlock);
+  TMonitor.Enter(FDelegates);
   try
     FDelegates.Add(AMethod);
   finally
-    TMonitor.Exit(FPadlock);
+    TMonitor.Exit(FDelegates);
   end;
 end;
 
 constructor TPkgDelegate<T>.Create;
 begin
   inherited Create;
-  FPadlock := TObject.Create;
   FDelegates := TList<T>.Create;
 end;
 
 destructor TPkgDelegate<T>.Destroy;
 begin
   FreeAndNil(FDelegates);
-  FreeAndNil(FPadlock);
   inherited;
 end;
 
 function TPkgDelegate<T>.GetEnumerator: TEnumerator<T>;
 begin
-  result := TDelegateEnumerator.Create(self, FDelegates, FPadlock);
+  result := TDelegateEnumerator.Create(self, FDelegates);
 end;
 
 procedure TPkgDelegate<T>.Invoke(AInvokerMethod: TProc<T>);
@@ -109,11 +108,11 @@ end;
 
 procedure TPkgDelegate<T>.Remove(AMethod: T);
 begin
-  TMonitor.Enter(FPadlock);
+  TMonitor.Enter(FDelegates);
   try
     FDelegates.Remove(AMethod);
   finally
-    TMonitor.Exit(FPadlock);
+    TMonitor.Exit(FDelegates);
   end;
 end;
 
@@ -131,19 +130,19 @@ end;
 //  (the Compiler "injects" try/finally block)
 //  So we can use locking wihtin the Enumerator
 
-constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<T>; APadlock: TObject);
+constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<T>);
 begin
   inherited Create(ADelegates);
   FDelegate := ADelegate;
-  FEnumeratorPadLock := APadlock;
+  FContainerDelegates := ADelegates;
   //  Locks Delegates container
-  TMonitor.Enter(FEnumeratorPadLock);
+  TMonitor.Enter(FContainerDelegates);
 end;
 
 destructor TPkgDelegate<T>.TDelegateEnumerator.Destroy;
 begin
   //  UnLocks Delegates container
-  TMonitor.Exit(FEnumeratorPadLock);
+  TMonitor.Exit(FContainerDelegates);
   inherited;
 end;
 
