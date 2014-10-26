@@ -69,7 +69,7 @@ end;
 procedure TForm2.Button3Click(Sender: TObject);
 begin
   memo1.Lines.Add('b3');
-  del1_.Remove(Button3Click);
+  //del1_.Remove(Button3Click);
 //  bx.Free;
 end;
 
@@ -104,7 +104,7 @@ begin
   bx := TButtonX.Create(nil);
   bx.Parent := self;
 
-  del1 := TPkgDelegate<TNotifyEvent>.Create(bx);
+  del1 := TPkgDelegate<TNotifyEvent>.Create(nil);
   del1_ := del1.toSafeDelegate;
   del1_.add(Button2Click);
   del1_.add(Button3Click);

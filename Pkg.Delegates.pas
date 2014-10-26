@@ -5,8 +5,6 @@ uses sysUtils, generics.collections, typInfo, classes, {$IFDEF VER210}rtti,{$END
 
 type
 
-
-
   //  Represents the lifetime of a handler
   THandlerLifetime = (hlPermanent, hlOneTime);
   //  Represents handler's status
@@ -60,20 +58,28 @@ type
   //  IPkgSafeDelegate<T> is used for external access
   //  External users can only add/remove delegates, but cannot execute them
   IPkgSafeDelegate<T> = interface ['{6233C0FE-175E-4EC0-91DC-17C4460219B3}']
-    function getIsExecuting: boolean;
     //  Adds a handler to the delegate
     procedure Add(AHandler: T; AHandlerLifeTime: THandlerLifetime = hlPermanent);
     //  Removes a handler from the delegate
     //  If the delegate is currently executing the handler is marked for deletion
     procedure Remove(AMethod: T);
     procedure RemoveAll;
-    property IsExecuting: boolean read getIsExecuting;
+
+  end;
+
+  //  System interface. Do not use it!
+  IPkgSysDelegate<T> = interface(IPkgSafeDelegate<T>) ['{F7A6778C-CA7D-4613-A8B0-2940099C4F9B}']
+    function getIsExecuting: boolean;
+    procedure setIsExecuting(const Value: boolean);
+    property IsExecuting: boolean read getIsExecuting write setIsExecuting;
+    //  Cleans handlers marked for deletion
+    procedure CleanupHandlers;
   end;
 
   //  IPkgDelegate<T> is the *MAIN* interface.
   //  Use a reference to it in your classes
   //  It is like a container for methods
-  IPkgDelegate<T> = interface(IPkgSafeDelegate<T>) ['{18EB7EC7-5843-459D-B147-2A2C1CA96539}']
+  IPkgDelegate<T> = interface(IPkgSysDelegate<T>) ['{18EB7EC7-5843-459D-B147-2A2C1CA96539}']
     //  Invokes methods in the execution queue using Invoker Anonymous method
     //  It's thread-safe!
     procedure Invoke(AInvokerMethod: TProc<T>);
@@ -82,15 +88,12 @@ type
     //  Used to invoke each method from execution queue using for-in construct
     //  It's thread-safe!
     function  GetEnumerator: TEnumerator<T>;
-    //  Cleans handlers marked for deletion
-    procedure CleanupHandlers;
   end;
 
   //  TPkgDelegate<T> is used only to create IPkgDelegate<T> instance
   //  DO NOT USE IT'S methods and DO NOT CAST to it!
-  TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>)
+  TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>, IPkgSysDelegate<T>)
     private
-      function getIsExecuting: boolean;
     protected
       //  List of handlers
       FHandlers: TList<TSysHandlerItem<T>>;
@@ -99,13 +102,15 @@ type
       //  Default Comparer is broken in Delphi 2009!!!
       //  We need own implementation
       function AreEqual(ALeft, ARight: T): boolean;
+      //  These should be protected to compile in Delphi 2009
+      function getIsExecuting: boolean;
+      procedure setIsExecuting(const Value: boolean);
     public type
       TDelegateEnumerator = class(TEnumerator<T>)
       private
         //  Keeps the instance of IPkgDelegate<T> alive
         //  for the period of for-in loop
-        FDelegate: IPkgDelegate<T>;
-        FTDelegate: TPkgDelegate<T>;
+        FDelegate: IPkgSysDelegate<T>;
         //  List of handlers i.e. execution queue
         //  It's used for locking
         //  NB: The Enumerator returns only active handlers!
@@ -135,7 +140,7 @@ type
       function    GetEnumerator: TEnumerator<T>;
       procedure   Invoke(AInvokerMethod: TProc<T>);
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
-      property    IsExecuting: boolean read getIsExecuting;
+      property    IsExecuting: boolean read getIsExecuting write setIsExecuting;
       procedure   CleanupHandlers;
   end;
 
@@ -225,6 +230,7 @@ end;
 
 destructor TPkgDelegate<T>.Destroy;
 begin
+  CleanupHandlers;
   FreeAndNil(FOwnerFreeNotificationSink);
   FreeAndNil(FHandlers);
   inherited;
@@ -312,6 +318,16 @@ begin
   end;
 end;
 
+procedure TPkgDelegate<T>.setIsExecuting(const Value: boolean);
+begin
+  TMonitor.Enter(FHandlers);
+  try
+    FIsExecuting := value;
+  finally
+    TMonitor.Exit(FHandlers);
+  end;
+end;
+
 function TPkgDelegate<T>.ToSafeDelegate: IPkgSafeDelegate<T>;
 begin
   result := self as IPkgSafeDelegate<T>;
@@ -330,12 +346,11 @@ constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T
 begin
   inherited Create;
   FDelegate := ADelegate;
-  FTDelegate := ADelegate as TPkgDelegate<T>;
   FDelegateHandlers := ADelegates;
   FIndex := -1;
   //  Locks Delegates container
   TMonitor.Enter(FDelegateHandlers);
-  FTDelegate.FIsExecuting := true;
+  FDelegate.IsExecuting := true;
 end;
 
 destructor TPkgDelegate<T>.TDelegateEnumerator.Destroy;
@@ -347,7 +362,7 @@ begin
   //  Remove stale handlers (i.e. handlers to be removed)
   FDelegate.CleanupHandlers;
 
-  FTDelegate.FIsExecuting := false;
+  FDelegate.IsExecuting := false;
   //  UnLocks Delegates container
   TMonitor.Exit(FDelegateHandlers);
   inherited;
