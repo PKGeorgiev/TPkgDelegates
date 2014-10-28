@@ -1,7 +1,7 @@
 unit Pkg.Delegates;
 
 interface
-uses sysUtils, generics.collections, typInfo, classes, {$IFDEF VER210}rtti,{$ENDIF}generics.defaults;
+uses sysUtils, generics.collections, typInfo, classes, {$IF CompilerVersion >= 21.0}rtti,{$ENDIF}generics.defaults;
 
 type
 
@@ -64,7 +64,6 @@ type
     //  If the delegate is currently executing the handler is marked for deletion
     procedure Remove(AMethod: T);
     procedure RemoveAll;
-
   end;
 
   //  System interface. Do not use it!
@@ -88,12 +87,15 @@ type
     //  Used to invoke each method from execution queue using for-in construct
     //  It's thread-safe!
     function  GetEnumerator: TEnumerator<T>;
+    function getCount: integer;
+    property Count: integer read getCount;
   end;
 
   //  TPkgDelegate<T> is used only to create IPkgDelegate<T> instance
   //  DO NOT USE IT'S methods and DO NOT CAST to it!
   TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>, IPkgSysDelegate<T>)
     private
+
     protected
       //  List of handlers
       FHandlers: TList<TSysHandlerItem<T>>;
@@ -105,6 +107,7 @@ type
       //  These should be protected to compile in Delphi 2009
       function getIsExecuting: boolean;
       procedure setIsExecuting(const Value: boolean);
+      function getCount: integer;
     public type
       TDelegateEnumerator = class(TEnumerator<T>)
       private
@@ -142,6 +145,7 @@ type
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
       property    IsExecuting: boolean read getIsExecuting write setIsExecuting;
       procedure   CleanupHandlers;
+      property    Count: integer read getCount;
   end;
 
 implementation
@@ -234,6 +238,16 @@ begin
   FreeAndNil(FOwnerFreeNotificationSink);
   FreeAndNil(FHandlers);
   inherited;
+end;
+
+function TPkgDelegate<T>.getCount: integer;
+begin
+  TMonitor.Enter(FHandlers);
+  try
+    result := FHandlers.Count;
+  finally
+    TMonitor.Exit(FHandlers);
+  end;
 end;
 
 function TPkgDelegate<T>.GetEnumerator: TEnumerator<T>;
@@ -414,7 +428,7 @@ var
   LMethod: ^TMethod;
   FSelf: TObject;
 
-  {$IFDEF VER210}
+  {$IF CompilerVersion >= 21.0}
   LObj: TObject;
   LRttiContext: TRttiContext;
   LRttyType: TRttiType;
@@ -443,7 +457,8 @@ begin
         );
     end;
 
-    {$IFDEF VER210}
+    //  Delphi 2010 and later support getting SELF for anonymous methods
+    {$IF CompilerVersion >= 21.0}
     if LTypeInfo^.Kind = tkInterface then
     begin
       LTypeData := PTypeData(LTypeInfo);
@@ -459,7 +474,7 @@ begin
             FSelf := LRttiField.GetValue(LObj).AsObject;
 
             if FSelf is TComponent then
-              FNotificationSink := TNotificationSink.Create(FSelf as TComponent,
+              FFreeNotificationSink := TFreeNotificationSink.Create(FSelf as TComponent,
                 procedure(Sender: TObject)
                 begin
                   Status := hsPendingDeletion;
