@@ -36,8 +36,19 @@ type
 
   IPkgDelegate<T> = interface;
 
+  ISysHandlerItem<T> = interface ['{E7E777D7-259F-4A6E-8548-A263E4882A07}']
+    function getStatus: THandlerStatus;
+    procedure setStatus(const Value: THandlerStatus);
+    function getLifeTime: THandlerLifetime;
+    function getHandler: T;
+
+    property Handler: T read getHandler;
+    property LifeTime: THandlerLifetime read getLifeTime;
+    property Status: THandlerStatus read getStatus write setStatus;
+  end;
+
   //  Holds conrete handler and it's attributes
-  TSysHandlerItem<T> = class
+  TSysHandlerItem<T> = class(TInterfacedObject, ISysHandlerItem<T>)
     private
       FPadLock: TObject;
       FHandler: T;
@@ -46,12 +57,14 @@ type
       FFreeNotificationSink: TFreeNotificationSink;
       function getStatus: THandlerStatus;
       procedure setStatus(const Value: THandlerStatus);
+      function getLifeTime: THandlerLifetime;
+      function getHandler: T;
     protected
     public
       constructor Create(AHandler: T; AHandlerLifeTime: THandlerLifetime = hlPermanent);
       destructor Destroy; override;
-      property Handler: T read FHandler;
-      property LifeTime: THandlerLifetime read FLifeTime;
+      property Handler: T read getHandler;
+      property LifeTime: THandlerLifetime read getLifeTime;
       property Status: THandlerStatus read getStatus write setStatus;
   end;
 
@@ -64,13 +77,6 @@ type
     //  If the delegate is currently executing the handler is marked for deletion
     procedure Remove(AMethod: T);
     procedure RemoveAll;
-  end;
-
-  //  System interface. Do not use it!
-  IPkgSysDelegate<T> = interface(IPkgSafeDelegate<T>) ['{F7A6778C-CA7D-4613-A8B0-2940099C4F9B}']
-    function getIsExecuting: boolean;
-    procedure setIsExecuting(const Value: boolean);
-    property IsExecuting: boolean read getIsExecuting write setIsExecuting;
     //  Cleans handlers marked for deletion
     procedure CleanupHandlers;
   end;
@@ -78,7 +84,7 @@ type
   //  IPkgDelegate<T> is the *MAIN* interface.
   //  Use a reference to it in your classes
   //  It is like a container for methods
-  IPkgDelegate<T> = interface(IPkgSysDelegate<T>) ['{18EB7EC7-5843-459D-B147-2A2C1CA96539}']
+  IPkgDelegate<T> = interface(IPkgSafeDelegate<T>) ['{18EB7EC7-5843-459D-B147-2A2C1CA96539}']
     //  Invokes methods in the execution queue using Invoker Anonymous method
     //  It's thread-safe!
     procedure Invoke(AInvokerMethod: TProc<T>);
@@ -93,12 +99,12 @@ type
 
   //  TPkgDelegate<T> is used only to create IPkgDelegate<T> instance
   //  DO NOT USE IT'S methods and DO NOT CAST to it!
-  TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>, IPkgSysDelegate<T>)
+  TPkgDelegate<T> = class(TInterfacedObject, IPkgSafeDelegate<T>, IPkgDelegate<T>)
     private
 
     protected
       //  List of handlers
-      FHandlers: TList<TSysHandlerItem<T>>;
+      FHandlers: TList<ISysHandlerItem<T>>;
       FIsExecuting: boolean;
       FOwnerFreeNotificationSink: TFreeNotificationSink;
       //  Default Comparer is broken in Delphi 2009!!!
@@ -113,12 +119,12 @@ type
       private
         //  Keeps the instance of IPkgDelegate<T> alive
         //  for the period of for-in loop
-        FDelegate: IPkgSysDelegate<T>;
+        FDelegate: IPkgDelegate<T>;
         //  List of handlers i.e. execution queue
         //  It's used for locking
         //  NB: The Enumerator returns only active handlers!
         FDelegateHandlers,
-        FCopyOfDelegateHandlers: TList<TSysHandlerItem<T>>;
+        FCopyOfDelegateHandlers: TList<ISysHandlerItem<T>>;
         FIndex: integer;
       protected
         function DoGetCurrent: T; override;
@@ -126,7 +132,7 @@ type
         function GetCurrent: T;
       public
         //  We lock parent container in the Constructor
-        constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<TSysHandlerItem<T>>);
+        constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
         //  We Unlock parent container in the Destructor
         destructor Destroy; override;
 
@@ -201,7 +207,7 @@ end;
 procedure TPkgDelegate<T>.CleanupHandlers;
 var
   k: integer;
-  LHandler: TSysHandlerItem<T>;
+  LHandler: ISysHandlerItem<T>;
 begin
   TMonitor.Enter(FHandlers);
   try
@@ -209,10 +215,7 @@ begin
     begin
       LHandler := FHandlers[k];
       if LHandler.Status = hsPendingDeletion then
-      begin
         FHandlers.Delete(k);
-        LHandler.Free;
-      end;
     end;
   finally
     TMonitor.Exit(FHandlers);
@@ -229,7 +232,7 @@ end;
 constructor TPkgDelegate<T>.Create(AOwner: TComponent);
 begin
   inherited Create;
-  FHandlers := TList<TSysHandlerItem<T>>.Create;
+  FHandlers := TList<ISysHandlerItem<T>>.Create;
   if assigned(AOwner) then
   begin
     FOwnerFreeNotificationSink := TFreeNotificationSink.Create(AOwner,
@@ -287,7 +290,7 @@ end;
 
 procedure TPkgDelegate<T>.Remove(AMethod: T);
 var
-  LHandler: TSysHandlerItem<T>;
+  LHandler: ISysHandlerItem<T>;
   k: integer;
   LComparer: IComparer<T>;
 begin
@@ -299,15 +302,9 @@ begin
       LHandler := FHandlers[k];
       if AreEqual(LHandler.Handler, AMethod) then
       begin
-        if FIsExecuting then
-          //  If the delegate is currently executing we mark the handler for deletion
-          LHandler.Status := hsPendingDeletion
-        else
-        begin
-          //  Completely remove the handler
-          FHandlers.Remove(LHandler);
-          LHandler.Free;
-        end;
+        //  Completely remove the handler
+        LHandler.Status := hsPendingDeletion;
+        FHandlers.Remove(LHandler);
         exit;
       end;
     end;
@@ -318,7 +315,7 @@ end;
 
 procedure TPkgDelegate<T>.RemoveAll;
 var
-  LHandler: TSysHandlerItem<T>;
+  LHandler: ISysHandlerItem<T>;
   k: integer;
 begin
   TMonitor.Enter(FHandlers);
@@ -326,15 +323,9 @@ begin
     for k := FHandlers.Count - 1 downto 0 do
     begin
       LHandler := FHandlers[k];
-      if FIsExecuting then
-        //  If the delegate is currently executing we mark the handler for deletion
-        LHandler.Status := hsPendingDeletion
-      else
-      begin
-        //  Completely remove the handler
-        FHandlers.Remove(LHandler);
-        LHandler.Free;
-      end;
+      //  Completely remove the handler
+      LHandler.Status := hsPendingDeletion;
+      FHandlers.Remove(LHandler);
     end;
   finally
     TMonitor.Exit(FHandlers);
@@ -365,7 +356,7 @@ end;
 //  (the Compiler "injects" try/finally block)
 //  So we can use locking wihtin the Enumerator
 
-constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<TSysHandlerItem<T>>);
+constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
 begin
   inherited Create;
   FDelegate := ADelegate;
@@ -373,8 +364,8 @@ begin
   FIndex := -1;
   //  Locks Delegates container
   TMonitor.Enter(FDelegateHandlers);
-  FDelegate.IsExecuting := true;
-  FCopyOfDelegateHandlers := TList<TSysHandlerItem<T>>.Create;
+  FCopyOfDelegateHandlers := TList<ISysHandlerItem<T>>.Create;
+  //  Create a copy of original FDelegateHandlers
   FCopyOfDelegateHandlers.AddRange(FDelegateHandlers);
 end;
 
@@ -387,7 +378,6 @@ begin
   //  Remove stale handlers (i.e. handlers to be removed)
   FDelegate.CleanupHandlers;
 
-  FDelegate.IsExecuting := false;
   FreeAndNil(FCopyOfDelegateHandlers);
   //  UnLocks Delegates container
   TMonitor.Exit(FDelegateHandlers);
@@ -509,6 +499,16 @@ begin
   FreeAndNil(FFreeNotificationSink);
   FreeAndNil(FPadLock);
   inherited;
+end;
+
+function TSysHandlerItem<T>.getHandler: T;
+begin
+  result := FHandler;
+end;
+
+function TSysHandlerItem<T>.getLifeTime: THandlerLifetime;
+begin
+  result := FLifeTime;
 end;
 
 function TSysHandlerItem<T>.getStatus: THandlerStatus;
