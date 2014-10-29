@@ -117,7 +117,8 @@ type
         //  List of handlers i.e. execution queue
         //  It's used for locking
         //  NB: The Enumerator returns only active handlers!
-        FDelegateHandlers: TList<TSysHandlerItem<T>>;
+        FDelegateHandlers,
+        FCopyOfDelegateHandlers: TList<TSysHandlerItem<T>>;
         FIndex: integer;
       protected
         function DoGetCurrent: T; override;
@@ -134,14 +135,15 @@ type
       end;
 
     public
-      constructor Create(AOwner: TComponent = nil);
+      constructor Create(AOwner: TComponent = nil); overload;
+      constructor Create(AHandler: T; AHandlerLifeTime: THandlerLifetime = hlPermanent; AOwner: TComponent = nil); overload;
       destructor  Destroy; override;
 
       procedure   Add(AHandler: T; AHandlerLifeTime: THandlerLifetime = hlPermanent);
       procedure   Remove(AMethod: T);
       procedure   RemoveAll;
       function    GetEnumerator: TEnumerator<T>;
-      procedure   Invoke(AInvokerMethod: TProc<T>);
+      procedure   Invoke(AInvokerMethod: TProc<T>); virtual;
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
       property    IsExecuting: boolean read getIsExecuting write setIsExecuting;
       procedure   CleanupHandlers;
@@ -215,6 +217,13 @@ begin
   finally
     TMonitor.Exit(FHandlers);
   end;
+end;
+
+constructor TPkgDelegate<T>.Create(AHandler: T;
+  AHandlerLifeTime: THandlerLifetime; AOwner: TComponent);
+begin
+  Create(AOwner);
+  add(AHandler, AHandlerLifeTime);
 end;
 
 constructor TPkgDelegate<T>.Create(AOwner: TComponent);
@@ -365,6 +374,8 @@ begin
   //  Locks Delegates container
   TMonitor.Enter(FDelegateHandlers);
   FDelegate.IsExecuting := true;
+  FCopyOfDelegateHandlers := TList<TSysHandlerItem<T>>.Create;
+  FCopyOfDelegateHandlers.AddRange(FDelegateHandlers);
 end;
 
 destructor TPkgDelegate<T>.TDelegateEnumerator.Destroy;
@@ -377,6 +388,7 @@ begin
   FDelegate.CleanupHandlers;
 
   FDelegate.IsExecuting := false;
+  FreeAndNil(FCopyOfDelegateHandlers);
   //  UnLocks Delegates container
   TMonitor.Exit(FDelegateHandlers);
   inherited;
@@ -394,27 +406,27 @@ end;
 
 function TPkgDelegate<T>.TDelegateEnumerator.GetCurrent: T;
 begin
-  if FDelegateHandlers[FIndex].LifeTime = hlOneTime then
-    FDelegateHandlers[FIndex].Status := hsPendingDeletion;
+  if FCopyOfDelegateHandlers[FIndex].LifeTime = hlOneTime then
+    FCopyOfDelegateHandlers[FIndex].Status := hsPendingDeletion;
 
-  result := FDelegateHandlers[FIndex].Handler;
+  result := FCopyOfDelegateHandlers[FIndex].Handler;
 end;
 
 function TPkgDelegate<T>.TDelegateEnumerator.MoveNext: Boolean;
 begin
-  if FIndex >= FDelegateHandlers.Count then
+  if FIndex >= FCopyOfDelegateHandlers.Count then
     Exit(False);
 
   Inc(FIndex);
 
   //  Find an active handler
-  while FIndex < FDelegateHandlers.Count do
+  while FIndex < FCopyOfDelegateHandlers.Count do
   begin
-    if FDelegateHandlers[FIndex].Status = hsActive then exit(true);
+    if FCopyOfDelegateHandlers[FIndex].Status = hsActive then exit(true);
     Inc(FIndex);
   end;
 
-  Result := FIndex < FDelegateHandlers.Count;
+  Result := FIndex < FCopyOfDelegateHandlers.Count;
 end;
 
 { TSysDelegateItem<T> }
