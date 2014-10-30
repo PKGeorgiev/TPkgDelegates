@@ -1,7 +1,9 @@
 unit Pkg.Delegates;
 
 interface
-uses sysUtils, generics.collections, typInfo, classes, {$IF CompilerVersion >= 21.0}rtti,{$ENDIF}generics.defaults;
+uses
+  sysUtils, generics.collections, typInfo,
+  {$IF CompilerVersion >= 21.0}rtti,{$ENDIF}classes;
 
 type
 
@@ -105,14 +107,11 @@ type
     protected
       //  List of handlers
       FHandlers: TList<ISysHandlerItem<T>>;
-      FIsExecuting: boolean;
       FOwnerFreeNotificationSink: TFreeNotificationSink;
       //  Default Comparer is broken in Delphi 2009!!!
       //  We need own implementation
       function AreEqual(ALeft, ARight: T): boolean;
       //  These should be protected to compile in Delphi 2009
-      function getIsExecuting: boolean;
-      procedure setIsExecuting(const Value: boolean);
       function getCount: integer;
     public type
       TDelegateEnumerator = class(TEnumerator<T>)
@@ -151,7 +150,6 @@ type
       function    GetEnumerator: TEnumerator<T>;
       procedure   Invoke(AInvokerMethod: TProc<T>); virtual;
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
-      property    IsExecuting: boolean read getIsExecuting write setIsExecuting;
       procedure   CleanupHandlers;
       property    Count: integer read getCount;
   end;
@@ -267,16 +265,6 @@ begin
   result := TDelegateEnumerator.Create(self, FHandlers);
 end;
 
-function TPkgDelegate<T>.getIsExecuting: boolean;
-begin
-  TMonitor.Enter(FHandlers);
-  try
-    result := FIsExecuting;
-  finally
-    TMonitor.Exit(FHandlers);
-  end;
-end;
-
 procedure TPkgDelegate<T>.Invoke(AInvokerMethod: TProc<T>);
 var
   LMethod: T;
@@ -292,11 +280,9 @@ procedure TPkgDelegate<T>.Remove(AMethod: T);
 var
   LHandler: ISysHandlerItem<T>;
   k: integer;
-  LComparer: IComparer<T>;
 begin
   TMonitor.Enter(FHandlers);
   try
-    LComparer := TComparer<T>.Default;
     for k := FHandlers.Count - 1 downto 0 do
     begin
       LHandler := FHandlers[k];
@@ -327,16 +313,6 @@ begin
       LHandler.Status := hsPendingDeletion;
       FHandlers.Remove(LHandler);
     end;
-  finally
-    TMonitor.Exit(FHandlers);
-  end;
-end;
-
-procedure TPkgDelegate<T>.setIsExecuting(const Value: boolean);
-begin
-  TMonitor.Enter(FHandlers);
-  try
-    FIsExecuting := value;
   finally
     TMonitor.Exit(FHandlers);
   end;
