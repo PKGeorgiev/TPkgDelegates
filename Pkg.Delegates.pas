@@ -86,12 +86,11 @@ type
     FDelegateHandlers,
     FCopyOfDelegateHandlers: TList<ISysHandlerItem<T>>;
     FIndex: integer;
-    FWasCreatedInMainThread: boolean;
+    FIsMainThreadEnumerator: boolean;
   protected
     function DoGetCurrent: T; override;
     function DoMoveNext: Boolean; override;
     function GetCurrent: T;
-    procedure internalDestroy;
   public
     //  We lock parent container in the Constructor
     constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
@@ -124,12 +123,14 @@ type
     //  Invokes methods in the execution queue using Invoker Anonymous method
     //  It's thread-safe!
     procedure Invoke(AInvokerMethod: TProc<T>);
+    //  Executes handlers in Main (VCL) thread context
+    //  Used to safely modify VCL/FMX objects (GUI)
+    procedure InvokeInMainThread(AInvokerMethod: TProc<T>);
     //  Easy casting to IPkgSafeDelegate<T>
     function  ToSafeDelegate: IPkgSafeDelegate<T>;
     //  Used to invoke each method from execution queue using for-in construct
     //  It's thread-safe!
     function  GetEnumerator: TDelegateEnumerator<T>;
-    function  InMainThread: TDelegateEnumerator<T>;
     function getCount: integer;
     property Count: integer read getCount;
   end;
@@ -159,8 +160,8 @@ type
       procedure   Remove(AMethod: T);
       procedure   RemoveAll;
       function    GetEnumerator: TDelegateEnumerator<T>;
-      function    InMainThread: TDelegateEnumerator<T>;
       procedure   Invoke(AInvokerMethod: TProc<T>); virtual;
+      procedure   InvokeInMainThread(AInvokerMethod: TProc<T>); virtual;
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
       procedure   CleanupHandlers;
       property    Count: integer read getCount;
@@ -277,22 +278,6 @@ begin
   result := TDelegateEnumerator<T>.Create(self, FHandlers);
 end;
 
-function TPkgDelegate<T>.InMainThread: TDelegateEnumerator<T>;
-var
-  LEnumerator: TDelegateEnumerator<T>;
-begin
-
-  TThread.Synchronize(nil, 
-    procedure
-    begin
-      LEnumerator := GetEnumerator;
-    end
-  );
-
-  result := LEnumerator;
-
-end;
-
 procedure TPkgDelegate<T>.Invoke(AInvokerMethod: TProc<T>);
 var
   LMethod: T;
@@ -302,6 +287,16 @@ begin
   begin
     AInvokerMethod(LMethod);
   end;
+end;
+
+procedure TPkgDelegate<T>.InvokeInMainThread(AInvokerMethod: TProc<T>);
+begin
+  TThread.Synchronize(nil,
+    procedure
+    begin
+      Invoke(AInvokerMethod);
+    end
+  );
 end;
 
 procedure TPkgDelegate<T>.Remove(AMethod: T);
@@ -378,7 +373,6 @@ begin
   FDelegate := ADelegate;
   FDelegateHandlers := ADelegates;
   FIndex := -1;
-  FWasCreatedInMainThread := TThread.CurrentThread.ThreadID = MainThreadID;
   //  Locks Delegates container
   syncStart(FDelegateHandlers);
   FCopyOfDelegateHandlers := TList<ISysHandlerItem<T>>.Create;
@@ -386,7 +380,9 @@ begin
   FCopyOfDelegateHandlers.AddRange(FDelegateHandlers);
 end;
 
-procedure TDelegateEnumerator<T>.internalDestroy;
+
+
+destructor TDelegateEnumerator<T>.Destroy;
 var
   LHandler: TSysHandlerItem<T>;
   k: integer;
@@ -397,22 +393,6 @@ begin
   FreeAndNil(FCopyOfDelegateHandlers);
   //  UnLocks Delegates container
   syncEnd(FDelegateHandlers);
-end;
-
-
-destructor TDelegateEnumerator<T>.Destroy;
-
-begin
-
-  if FWasCreatedInMainThread then
-    TThread.Synchronize(nil,
-      procedure
-      begin
-        internalDestroy;
-      end
-    )
-  else
-    internalDestroy;
 
   inherited;
 end;

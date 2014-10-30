@@ -94,17 +94,18 @@ var
   LMethod: TNotifyEvent;
 begin
 
-//  for LMethod in del1.InMainThread do LMethod(self);
-//  exit;
-
   TThread.CreateAnonymousThread(
     procedure
     var
       LMethod: TNotifyEvent;
     begin
-      for LMethod in del1.InMainThread do LMethod(self);
+      del1.InvokeInMainThread(
+        procedure(AHandler: TNotifyEvent)
+        begin
+          AHandler(self);
+        end
+      );
 
-      memo1.Lines.Add('finished');
     end
   ).Start;
 
