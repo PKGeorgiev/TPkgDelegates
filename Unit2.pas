@@ -22,12 +22,14 @@ type
     Button3: TButton;
     Button4: TButton;
     Button5: TButton;
+    Button6: TButton;
     procedure FormCreate(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure Button3Click(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure Button4Click(Sender: TObject);
     procedure Button5Click(Sender: TObject);
+    procedure Button6Click(Sender: TObject);
   private
     { Private declarations }
   public
@@ -65,7 +67,7 @@ end;
 procedure TForm2.Button2Click(Sender: TObject);
 begin
   memo1.Lines.Add('b2');
-  del1.Add(Button5Click);
+//  del1.Add(Button5Click);
 end;
 
 procedure TForm2.Button3Click(Sender: TObject);
@@ -85,6 +87,27 @@ begin
   memo1.Lines.Add('b5');
   del1.Remove(Button5Click);
   del1.Remove(Button2Click);
+end;
+
+procedure TForm2.Button6Click(Sender: TObject);
+var
+  LMethod: TNotifyEvent;
+begin
+
+//  for LMethod in del1.InMainThread do LMethod(self);
+//  exit;
+
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      LMethod: TNotifyEvent;
+    begin
+      for LMethod in del1.InMainThread do LMethod(self);
+
+      memo1.Lines.Add('finished');
+    end
+  ).Start;
+
 end;
 
 procedure TForm2.ButtonXClick(Sender: TObject);

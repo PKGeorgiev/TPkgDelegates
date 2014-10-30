@@ -5,6 +5,9 @@ uses
   sysUtils, generics.collections, typInfo,
   {$IF CompilerVersion >= 21.0}rtti,{$ENDIF}classes;
 
+procedure syncStart(ASyncObject: TObject);
+procedure syncEnd(ASyncObject: TObject);  
+  
 type
 
   //  Represents the lifetime of a handler
@@ -19,6 +22,8 @@ type
     // StaticCast does a hard type cast but requires an input type
     class function StaticCast<T, ReturnT>(const Value: T): ReturnT;
   end;
+
+
 
   //  Used to remove handlers of destroyed owner components
   //  I.e. owners that support FreeNotification method
@@ -70,6 +75,35 @@ type
       property Status: THandlerStatus read getStatus write setStatus;
   end;
 
+  TDelegateEnumerator<T> = class(TEnumerator<T>)
+  private
+    //  Keeps the instance of IPkgDelegate<T> alive
+    //  for the period of for-in loop
+    FDelegate: IPkgDelegate<T>;
+    //  List of handlers i.e. execution queue
+    //  It's used for locking
+    //  NB: The Enumerator returns only active handlers!
+    FDelegateHandlers,
+    FCopyOfDelegateHandlers: TList<ISysHandlerItem<T>>;
+    FIndex: integer;
+    FWasCreatedInMainThread: boolean;
+  protected
+    function DoGetCurrent: T; override;
+    function DoMoveNext: Boolean; override;
+    function GetCurrent: T;
+    procedure internalDestroy;
+  public
+    //  We lock parent container in the Constructor
+    constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
+    //  We Unlock parent container in the Destructor
+    destructor Destroy; override;
+
+    property Current: T read DoGetCurrent;
+    function MoveNext: Boolean;
+
+    function GetEnumerator: TEnumerator<T>;
+  end;  
+
   //  IPkgSafeDelegate<T> is used for external access
   //  External users can only add/remove delegates, but cannot execute them
   IPkgSafeDelegate<T> = interface ['{6233C0FE-175E-4EC0-91DC-17C4460219B3}']
@@ -94,7 +128,8 @@ type
     function  ToSafeDelegate: IPkgSafeDelegate<T>;
     //  Used to invoke each method from execution queue using for-in construct
     //  It's thread-safe!
-    function  GetEnumerator: TEnumerator<T>;
+    function  GetEnumerator: TDelegateEnumerator<T>;
+    function  InMainThread: TDelegateEnumerator<T>;
     function getCount: integer;
     property Count: integer read getCount;
   end;
@@ -113,31 +148,7 @@ type
       function AreEqual(ALeft, ARight: T): boolean;
       //  These should be protected to compile in Delphi 2009
       function getCount: integer;
-    public type
-      TDelegateEnumerator = class(TEnumerator<T>)
-      private
-        //  Keeps the instance of IPkgDelegate<T> alive
-        //  for the period of for-in loop
-        FDelegate: IPkgDelegate<T>;
-        //  List of handlers i.e. execution queue
-        //  It's used for locking
-        //  NB: The Enumerator returns only active handlers!
-        FDelegateHandlers,
-        FCopyOfDelegateHandlers: TList<ISysHandlerItem<T>>;
-        FIndex: integer;
-      protected
-        function DoGetCurrent: T; override;
-        function DoMoveNext: Boolean; override;
-        function GetCurrent: T;
-      public
-        //  We lock parent container in the Constructor
-        constructor Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
-        //  We Unlock parent container in the Destructor
-        destructor Destroy; override;
 
-        property Current: T read DoGetCurrent;
-        function MoveNext: Boolean;
-      end;
 
     public
       constructor Create(AOwner: TComponent = nil); overload;
@@ -147,7 +158,8 @@ type
       procedure   Add(AHandler: T; AHandlerLifeTime: THandlerLifetime = hlPermanent);
       procedure   Remove(AMethod: T);
       procedure   RemoveAll;
-      function    GetEnumerator: TEnumerator<T>;
+      function    GetEnumerator: TDelegateEnumerator<T>;
+      function    InMainThread: TDelegateEnumerator<T>;
       procedure   Invoke(AInvokerMethod: TProc<T>); virtual;
       function    ToSafeDelegate: IPkgSafeDelegate<T>;
       procedure   CleanupHandlers;
@@ -162,12 +174,12 @@ procedure TPkgDelegate<T>.Add(AHandler: T; AHandlerLifeTime: THandlerLifetime);
 var
   LDelegateRec: TSysHandlerItem<T>;
 begin
-  TMonitor.Enter(FHandlers);
+  syncStart(FHandlers);
   try
     LDelegateRec := TSysHandlerItem<T>.Create(AHandler, AHandlerLifeTime);
     FHandlers.Add(LDelegateRec);
   finally
-    TMonitor.Exit(FHandlers);
+    syncEnd(FHandlers);
   end;
 end;
 
@@ -207,7 +219,7 @@ var
   k: integer;
   LHandler: ISysHandlerItem<T>;
 begin
-  TMonitor.Enter(FHandlers);
+  syncStart(FHandlers);
   try
     for k := FHandlers.Count - 1 downto 0 do
     begin
@@ -216,7 +228,7 @@ begin
         FHandlers.Delete(k);
     end;
   finally
-    TMonitor.Exit(FHandlers);
+    syncEnd(FHandlers);
   end;
 end;
 
@@ -252,17 +264,33 @@ end;
 
 function TPkgDelegate<T>.getCount: integer;
 begin
-  TMonitor.Enter(FHandlers);
+  syncStart(FHandlers);
   try
     result := FHandlers.Count;
   finally
-    TMonitor.Exit(FHandlers);
+    syncEnd(FHandlers);
   end;
 end;
 
-function TPkgDelegate<T>.GetEnumerator: TEnumerator<T>;
+function TPkgDelegate<T>.GetEnumerator: TDelegateEnumerator<T>;
 begin
-  result := TDelegateEnumerator.Create(self, FHandlers);
+  result := TDelegateEnumerator<T>.Create(self, FHandlers);
+end;
+
+function TPkgDelegate<T>.InMainThread: TDelegateEnumerator<T>;
+var
+  LEnumerator: TDelegateEnumerator<T>;
+begin
+
+  TThread.Synchronize(nil, 
+    procedure
+    begin
+      LEnumerator := GetEnumerator;
+    end
+  );
+
+  result := LEnumerator;
+
 end;
 
 procedure TPkgDelegate<T>.Invoke(AInvokerMethod: TProc<T>);
@@ -281,7 +309,7 @@ var
   LHandler: ISysHandlerItem<T>;
   k: integer;
 begin
-  TMonitor.Enter(FHandlers);
+  syncStart(FHandlers);
   try
     for k := FHandlers.Count - 1 downto 0 do
     begin
@@ -295,7 +323,7 @@ begin
       end;
     end;
   finally
-    TMonitor.Exit(FHandlers);
+    syncEnd(FHandlers);
   end;
 end;
 
@@ -304,7 +332,7 @@ var
   LHandler: ISysHandlerItem<T>;
   k: integer;
 begin
-  TMonitor.Enter(FHandlers);
+  syncStart(FHandlers);
   try
     for k := FHandlers.Count - 1 downto 0 do
     begin
@@ -314,8 +342,20 @@ begin
       FHandlers.Remove(LHandler);
     end;
   finally
-    TMonitor.Exit(FHandlers);
+    syncEnd(FHandlers);
   end;
+end;
+
+procedure syncEnd(ASyncObject: TObject);
+begin
+  if TThread.CurrentThread.ThreadID <> MainThreadID then
+    TMonitor.Exit(ASyncObject);
+end;
+
+procedure syncStart(ASyncObject: TObject);
+begin
+  if TThread.CurrentThread.ThreadID <> MainThreadID then
+    TMonitor.Enter(ASyncObject);
 end;
 
 function TPkgDelegate<T>.ToSafeDelegate: IPkgSafeDelegate<T>;
@@ -332,45 +372,62 @@ end;
 //  (the Compiler "injects" try/finally block)
 //  So we can use locking wihtin the Enumerator
 
-constructor TPkgDelegate<T>.TDelegateEnumerator.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
+constructor TDelegateEnumerator<T>.Create(ADelegate: IPkgDelegate<T>; ADelegates: TList<ISysHandlerItem<T>>);
 begin
   inherited Create;
   FDelegate := ADelegate;
   FDelegateHandlers := ADelegates;
   FIndex := -1;
+  FWasCreatedInMainThread := TThread.CurrentThread.ThreadID = MainThreadID;
   //  Locks Delegates container
-  TMonitor.Enter(FDelegateHandlers);
+  syncStart(FDelegateHandlers);
   FCopyOfDelegateHandlers := TList<ISysHandlerItem<T>>.Create;
   //  Create a copy of original FDelegateHandlers
   FCopyOfDelegateHandlers.AddRange(FDelegateHandlers);
 end;
 
-destructor TPkgDelegate<T>.TDelegateEnumerator.Destroy;
+procedure TDelegateEnumerator<T>.internalDestroy;
 var
   LHandler: TSysHandlerItem<T>;
   k: integer;
 begin
-
   //  Remove stale handlers (i.e. handlers to be removed)
   FDelegate.CleanupHandlers;
 
   FreeAndNil(FCopyOfDelegateHandlers);
   //  UnLocks Delegates container
-  TMonitor.Exit(FDelegateHandlers);
+  syncEnd(FDelegateHandlers);
+end;
+
+
+destructor TDelegateEnumerator<T>.Destroy;
+
+begin
+
+  if FWasCreatedInMainThread then
+    TThread.Synchronize(nil,
+      procedure
+      begin
+        internalDestroy;
+      end
+    )
+  else
+    internalDestroy;
+
   inherited;
 end;
 
-function TPkgDelegate<T>.TDelegateEnumerator.DoGetCurrent: T;
+function TDelegateEnumerator<T>.DoGetCurrent: T;
 begin
   result := GetCurrent;
 end;
 
-function TPkgDelegate<T>.TDelegateEnumerator.DoMoveNext: Boolean;
+function TDelegateEnumerator<T>.DoMoveNext: Boolean;
 begin
   result := MoveNext;
 end;
 
-function TPkgDelegate<T>.TDelegateEnumerator.GetCurrent: T;
+function TDelegateEnumerator<T>.GetCurrent: T;
 begin
   if FCopyOfDelegateHandlers[FIndex].LifeTime = hlOneTime then
     FCopyOfDelegateHandlers[FIndex].Status := hsPendingDeletion;
@@ -378,7 +435,13 @@ begin
   result := FCopyOfDelegateHandlers[FIndex].Handler;
 end;
 
-function TPkgDelegate<T>.TDelegateEnumerator.MoveNext: Boolean;
+function TDelegateEnumerator<T>.GetEnumerator: TEnumerator<T>;
+begin
+  result := self;
+end;
+
+
+function TDelegateEnumerator<T>.MoveNext: Boolean;
 begin
   if FIndex >= FCopyOfDelegateHandlers.Count then
     Exit(False);
@@ -489,21 +552,21 @@ end;
 
 function TSysHandlerItem<T>.getStatus: THandlerStatus;
 begin
-  TMonitor.Enter(FPadLock);
+  syncStart(FPadLock);
   try
     result := FStatus;
   finally
-    TMonitor.Exit(FPadLock);
+    syncEnd(FPadLock);
   end;
 end;
 
 procedure TSysHandlerItem<T>.setStatus(const Value: THandlerStatus);
 begin
-  TMonitor.Enter(FPadLock);
+  syncStart(FPadLock);
   try
     FStatus := value;
   finally
-    TMonitor.Exit(FPadLock);
+    syncEnd(FPadLock);
   end;
 end;
 

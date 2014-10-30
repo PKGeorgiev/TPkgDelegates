@@ -53,4 +53,14 @@ object Form2: TForm2
     Text = 'Button5'
     OnClick = Button5Click
   end
+  object Button6: TButton
+    Position.X = 584.000000000000000000
+    Position.Y = 40.000000000000000000
+    Size.Width = 121.000000000000000000
+    Size.Height = 22.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 6
+    Text = 'InMainThread'
+    OnClick = Button6Click
+  end
 end
